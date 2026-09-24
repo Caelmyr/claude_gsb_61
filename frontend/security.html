@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>账号安全 - 在线代码评测与竞赛系统</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <div id="nav"></div>
+
+  <div class="container" style="max-width:860px">
+    <div class="page-head">
+      <div>
+        <h1>🔐 账号安全</h1>
+        <div class="sub">修改密码、查看登录记录并管理已登录的设备</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">修改密码</div>
+      <div class="form-group"><label>原密码</label><input id="oldPass" type="password" placeholder="请输入当前使用的密码"></div>
+      <div class="form-row">
+        <div class="form-group"><label>新密码</label><input id="newPass" type="password" placeholder="至少 8 位，包含字母和数字"></div>
+        <div class="form-group"><label>确认新密码</label><input id="newPass2" type="password" placeholder="再次输入新密码" onkeydown="if(event.key==='Enter')changePassword()"></div>
+      </div>
+      <button class="btn btn-primary" onclick="changePassword()">确认修改</button>
+      <span class="hint" style="margin-left:8px">修改成功后，其他设备上的登录将立即失效</span>
+    </div>
+
+    <div class="card">
+      <div class="card-title">
+        登录记录
+        <span>
+          <button class="btn btn-outline btn-sm" onclick="loadSessions()">🔄 刷新</button>
+          <button class="btn btn-danger btn-sm" onclick="kickOthers()">踢掉其他所有登录</button>
+        </span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>登录时间</th><th>来源 IP</th><th>设备 / 浏览器</th><th class="text-center">状态</th><th></th></tr>
+          </thead>
+          <tbody id="sessionList">
+            <tr><td colspan="5" class="empty">加载中…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script src="/assets/app.js"></script>
+  <script>
+    OJ.boot("security");
+
+    // 将 User-Agent 解析为可读的「浏览器 · 系统」
+    function fmtUA(ua) {
+      if (!ua) return "未知设备";
+      let browser = "未知浏览器";
+      if (/Edg\//.test(ua)) browser = "Edge";
+      else if (/Chrome\//.test(ua)) browser = "Chrome";
+      else if (/Firefox\//.test(ua)) browser = "Firefox";
+      else if (/Safari\//.test(ua)) browser = "Safari";
+      else if (/curl|python-requests|PostmanRuntime/.test(ua)) browser = "API 客户端";
+      let os = "";
+      if (/Windows/.test(ua)) os = "Windows";
+      else if (/Android/.test(ua)) os = "Android";
+      else if (/iPhone|iPad/.test(ua)) os = "iOS";
+      else if (/Mac OS X/.test(ua)) os = "macOS";
+      else if (/Linux/.test(ua)) os = "Linux";
+      return browser + (os ? " · " + os : "");
+    }
+
+    async function changePassword() {
+      const oldPass = OJ.el("oldPass").value;
+      const newPass = OJ.el("newPass").value;
+      const newPass2 = OJ.el("newPass2").value;
+      if (!oldPass || !newPass) { OJ.toast("请填写原密码和新密码", "error"); return; }
+      if (newPass !== newPass2) { OJ.toast("两次输入的新密码不一致", "error"); return; }
+      if (newPass.length < 8) { OJ.toast("新密码至少 8 位", "error"); return; }
+      if (!/[A-Za-z]/.test(newPass) || !/\d/.test(newPass)) { OJ.toast("新密码需同时包含字母和数字", "error"); return; }
+      try {
+        await OJ.api("/auth/password", { method: "POST", body: { old_password: oldPass, new_password: newPass } });
+        OJ.el("oldPass").value = OJ.el("newPass").value = OJ.el("newPass2").value = "";
+        OJ.toast("密码已修改，其他登录已强制下线", "success");
+        loadSessions();
+      } catch (e) { OJ.toast(e.message, "error"); }
+    }
+
+    async function loadSessions() {
+      const tbody = OJ.el("sessionList");
+      let list;
+      try { list = await OJ.api("/auth/sessions"); }
+      catch (e) { tbody.innerHTML = `<tr><td colspan="5" class="empty">${OJ.esc(e.message)}</td></tr>`; return; }
+      if (!list.length) { tbody.innerHTML = `<tr><td colspan="5" class="empty">暂无登录记录</td></tr>`; return; }
+      tbody.innerHTML = list.map(s => `
+        <tr>
+          <td class="mono">${OJ.fmtTime(s.created_at)}</td>
+          <td class="mono">${OJ.esc(s.ip || "-")}</td>
+          <td title="${OJ.esc(s.user_agent)}">${OJ.esc(fmtUA(s.user_agent))}</td>
+          <td class="text-center">${s.current ? '<span class="badge AC">当前会话</span>' : '<span class="muted">已登录</span>'}</td>
+          <td class="text-right">
+            ${s.current ? '<span class="hint">正在使用</span>'
+                        : `<button class="btn btn-danger btn-sm" onclick="kick('${OJ.esc(s.id)}')">踢下线</button>`}
+          </td>
+        </tr>`).join("");
+    }
+
+    async function kick(id) {
+      if (!await OJ.confirmDialog("确定将该登录踢下线？对应设备需要重新登录。")) return;
+      try {
+        await OJ.api("/auth/sessions/" + encodeURIComponent(id), { method: "DELETE" });
+        OJ.toast("已踢下线", "success");
+        loadSessions();
+      } catch (e) { OJ.toast(e.message, "error"); loadSessions(); }
+    }
+
+    async function kickOthers() {
+      if (!await OJ.confirmDialog("确定踢掉除当前会话以外的所有登录？")) return;
+      try {
+        const res = await OJ.api("/auth/sessions/kick_others", { method: "POST" });
+        OJ.toast(res.kicked ? `已踢掉 ${res.kicked} 个登录` : "没有其他登录", "success");
+        loadSessions();
+      } catch (e) { OJ.toast(e.message, "error"); loadSessions(); }
+    }
+
+    (async () => {
+      try { await OJ.requireAuth(); } catch (e) { return; }
+      loadSessions();
+    })();
+  </script>
+</body>
+</html>

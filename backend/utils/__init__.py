@@ -55,23 +55,39 @@ def verify_password(password, salt, expected):
     return hmac.compare_digest(digest, expected)
 
 
-def sign_token(user_id, secret):
-    """签发 HMAC-SHA256 签名 token：<user_id>.<hexsig>。"""
-    msg = f"{user_id}".encode("utf-8")
+def sign_token(user_id, secret, session_id=""):
+    """签发 HMAC-SHA256 签名 token：<user_id>.<session_id>.<hexsig>。
+
+    token 绑定一次登录会话，会话被踢下线或密码修改后 token 立即失效。
+    """
+    msg = f"{user_id}.{session_id}".encode("utf-8")
     sig = hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
-    return f"{user_id}.{sig}"
+    return f"{user_id}.{session_id}.{sig}"
 
 
 def verify_token(token, secret):
-    """校验 token，返回 user_id 或 None。"""
-    if not token or "." not in token:
+    """校验 token，返回 (user_id, session_id) 或 None。"""
+    if not token:
         return None
-    user_id, sig = token.rsplit(".", 1)
-    expected = hmac.new(secret.encode("utf-8"), user_id.encode("utf-8"),
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None
+    user_id, session_id, sig = parts
+    expected = hmac.new(secret.encode("utf-8"),
+                        f"{user_id}.{session_id}".encode("utf-8"),
                         hashlib.sha256).hexdigest()
     if not hmac.compare_digest(sig, expected):
         return None
-    return user_id
+    return user_id, session_id
+
+
+def password_strength_error(password):
+    """基本强度校验：至少 8 位，且同时包含字母和数字。返回错误信息或 None。"""
+    if not password or len(password) < 8:
+        return "新密码至少 8 位"
+    if not re.search(r"[A-Za-z]", password) or not re.search(r"\d", password):
+        return "新密码需同时包含字母和数字"
+    return None
 
 
 _SAFE_RE = re.compile(r"[^A-Za-z0-9._-]")

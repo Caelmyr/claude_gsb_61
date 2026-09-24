@@ -62,6 +62,7 @@
   }
 
   /* ---------- 导航 ---------- */
+  // [链接, 文案, key, 仅管理员, 仅登录用户]
   const NAV = [
     ["/index.html", "题目列表", "index"],
     ["/submissions.html", "提交记录", "submissions"],
@@ -69,6 +70,7 @@
     ["/contest.html", "竞赛", "contest"],
     ["/forum.html", "讨论区", "forum"],
     ["/stats.html", "统计报表", "stats"],
+    ["/security.html", "账号安全", "security", false, true],
     ["/users.html", "用户管理", "users", true],
     ["/settings.html", "系统设置", "settings", true],
   ];
@@ -79,8 +81,9 @@
     const user = currentUser();
     const admin = isAdmin();
     let links = "";
-    for (const [href, label, key, adminOnly] of NAV) {
+    for (const [href, label, key, adminOnly, loginOnly] of NAV) {
       if (adminOnly && !admin) continue;
+      if (loginOnly && !user) continue;
       links += `<a href="${href}" class="${active === key ? "active" : ""}">${label}</a>`;
     }
     el.innerHTML = `

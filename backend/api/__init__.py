@@ -46,14 +46,25 @@ def find_user_by_username(username):
 
 
 def get_current_user():
-    """从 token 解析当前用户（已登录则返回用户 dict，否则 None）。"""
+    """从 token 解析当前用户（已登录则返回用户 dict，否则 None）。
+
+    token 绑定的会话必须仍存在于用户 sessions 列表中，
+    被踢下线或密码修改后旧 token 立即失效。
+    """
     token = _extract_token()
     if not token:
         return None
-    user_id = verify_token(token, config.SECRET_KEY)
-    if not user_id:
+    parsed = verify_token(token, config.SECRET_KEY)
+    if not parsed:
         return None
-    return find_user_by_id(user_id)
+    user_id, session_id = parsed
+    user = find_user_by_id(user_id)
+    if not user:
+        return None
+    if not any(s.get("id") == session_id for s in user.get("sessions") or []):
+        return None
+    request.session_id = session_id
+    return user
 
 
 def require_auth(fn):
