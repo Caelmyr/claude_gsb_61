@@ -12,6 +12,7 @@ from flask import Blueprint, jsonify, request
 from backend import config
 from backend.storage import read_json, list_files
 from backend.utils import verify_token
+from backend import sessions
 
 
 def ok(data=None, **extra):
@@ -46,14 +47,24 @@ def find_user_by_username(username):
 
 
 def get_current_user():
-    """从 token 解析当前用户（已登录则返回用户 dict，否则 None）。"""
+    """从 token 解析当前用户（已登录且会话有效则返回用户 dict，否则 None）。"""
     token = _extract_token()
     if not token:
         return None
-    user_id = verify_token(token, config.SECRET_KEY)
-    if not user_id:
+    user_id, sid = verify_token(token, config.SECRET_KEY)
+    if not user_id or not sid:
+        # 缺少服务端会话的旧式 token 一律视为失效
         return None
-    return find_user_by_id(user_id)
+    user = find_user_by_id(user_id)
+    if user is None:
+        return None
+    record = sessions.get_record(user_id, sid)
+    if not record or record.get("revoked"):
+        return None
+    # 更新最近活跃时间（内部按 60 秒节流）
+    sessions.touch(user_id, sid)
+    request.session_sid = sid
+    return user
 
 
 def require_auth(fn):

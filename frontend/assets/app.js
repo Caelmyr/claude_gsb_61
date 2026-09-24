@@ -38,6 +38,8 @@
     try { data = await res.json(); } catch (e) { /* 非 JSON */ }
     if (res.status === 401) {
       logout();
+      // 通知页面：会话已失效（被踢下线 / 密码被修改 / 登录过期）
+      window.dispatchEvent(new CustomEvent("oj-session-expired", { detail: data.message || "" }));
       throw new Error(data.message || "未登录或登录已过期");
     }
     if (data.code !== 0) {
@@ -49,6 +51,11 @@
   /* ---------- 认证 ---------- */
   function setSession(token, user) { store.token = token; store.user = user; }
   function logout() { store.token = ""; store.user = null; }
+  async function signOut() {
+    try { if (store.token) await api("/auth/logout", { method: "POST" }); } catch (e) { /* 忽略：本地照样清除 */ }
+    logout();
+    location.href = "/index.html";
+  }
   function currentUser() { return store.user; }
   function isAdmin() { const u = store.user; return u && u.role === "admin"; }
   async function requireAuth() {
@@ -71,6 +78,7 @@
     ["/stats.html", "统计报表", "stats"],
     ["/users.html", "用户管理", "users", true],
     ["/settings.html", "系统设置", "settings", true],
+    ["/account.html", "账号安全", "account", "auth"],
   ];
 
   function renderNav(active) {
@@ -79,8 +87,9 @@
     const user = currentUser();
     const admin = isAdmin();
     let links = "";
-    for (const [href, label, key, adminOnly] of NAV) {
-      if (adminOnly && !admin) continue;
+    for (const [href, label, key, visibility] of NAV) {
+      if (visibility === true && !admin) continue;
+      if (visibility === "auth" && !user) continue;
       links += `<a href="${href}" class="${active === key ? "active" : ""}">${label}</a>`;
     }
     el.innerHTML = `
@@ -90,9 +99,9 @@
           <div class="nav-links">${links}</div>
           <div class="nav-user">
             ${user
-              ? `<span class="uname">${esc(user.nickname || user.username)}</span>` +
+              ? `<a class="uname" href="/account.html" title="账号安全">${esc(user.nickname || user.username)}</a>` +
                 (admin ? `<span class="role-tag">管理员</span>` : "") +
-                `<button class="btn btn-outline btn-sm" onclick="OJ.logout();location.href='/index.html'">退出</button>`
+                `<button class="btn btn-outline btn-sm" onclick="OJ.signOut()">退出</button>`
               : `<button class="btn btn-primary btn-sm" onclick="location.href='/index.html?login=1'">登录</button>`}
           </div>
         </div>
@@ -148,6 +157,16 @@
   }
 
   function el(id) { return document.getElementById(id); }
+
+  function passwordStrength(pw) {
+    /** 返回 {ok, message}：基本要求 8 位以上且含字母和数字。 */
+    if (!pw) return { ok: false, message: "密码不能为空" };
+    if (pw.length < 8) return { ok: false, message: "密码长度至少 8 位" };
+    if (pw.length > 64) return { ok: false, message: "密码长度不能超过 64 位" };
+    if (!/[A-Za-z]/.test(pw)) return { ok: false, message: "密码必须包含字母" };
+    if (!/[0-9]/.test(pw)) return { ok: false, message: "密码必须包含数字" };
+    return { ok: true, message: "" };
+  }
 
   function openModal(title, bodyHTML) {
     const mask = document.createElement("div");
@@ -209,8 +228,8 @@
 
   global.OJ = {
     api, esc, fmtTime, fmtDuration, fmtMem, verdictBadge, difficultyLabel,
-    toast, el, openModal, confirmDialog, boot, countdown,
-    setSession, logout, currentUser, isAdmin, requireAuth, goLogin,
+    toast, el, openModal, confirmDialog, boot, countdown, passwordStrength,
+    setSession, logout, signOut, currentUser, isAdmin, requireAuth, goLogin,
     store,
   };
 })(window);

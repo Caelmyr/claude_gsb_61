@@ -55,23 +55,92 @@ def verify_password(password, salt, expected):
     return hmac.compare_digest(digest, expected)
 
 
-def sign_token(user_id, secret):
-    """签发 HMAC-SHA256 签名 token：<user_id>.<hexsig>。"""
-    msg = f"{user_id}".encode("utf-8")
+def sign_token(user_id, secret, sid=""):
+    """签发 HMAC-SHA256 签名 token：<user_id>.<sid>.<hexsig>。
+
+    sid 为服务端会话 ID；空串表示无会话的旧式 token（兼容）。
+    """
+    msg = f"{user_id}.{sid}".encode("utf-8")
     sig = hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
-    return f"{user_id}.{sig}"
+    return f"{user_id}.{sid}.{sig}"
 
 
 def verify_token(token, secret):
-    """校验 token，返回 user_id 或 None。"""
-    if not token or "." not in token:
-        return None
-    user_id, sig = token.rsplit(".", 1)
-    expected = hmac.new(secret.encode("utf-8"), user_id.encode("utf-8"),
+    """校验 token，返回 (user_id, sid)；不合法返回 (None, None)。"""
+    if not token or token.count(".") < 2:
+        return None, None
+    user_id, sid, sig = token.split(".", 2)
+    expected = hmac.new(secret.encode("utf-8"),
+                        f"{user_id}.{sid}".encode("utf-8"),
                         hashlib.sha256).hexdigest()
     if not hmac.compare_digest(sig, expected):
-        return None
-    return user_id
+        return None, None
+    return user_id, sid
+
+
+def password_strength_error(password):
+    """返回密码强度错误信息；满足基本要求返回 None。
+
+    基本要求：长度 8~64，必须同时包含字母与数字。
+    """
+    if not password or not isinstance(password, str):
+        return "密码不能为空"
+    if len(password) < 8:
+        return "密码长度至少 8 位"
+    if len(password) > 64:
+        return "密码长度不能超过 64 位"
+    if not re.search(r"[A-Za-z]", password):
+        return "密码必须包含字母"
+    if not re.search(r"[0-9]", password):
+        return "密码必须包含数字"
+    return None
+
+
+def parse_user_agent(ua):
+    """从 User-Agent 粗略解析浏览器/设备描述。"""
+    if not ua:
+        return "未知设备"
+    s = ua
+    if "Edg/" in s:
+        browser = "Edge"
+    elif "OPR/" in s or "Opera" in s:
+        browser = "Opera"
+    elif "Chrome/" in s and "Chromium/" not in s:
+        browser = "Chrome"
+    elif "Firefox/" in s:
+        browser = "Firefox"
+    elif "Safari/" in s:
+        browser = "Safari"
+    else:
+        browser = "未知浏览器"
+    if "iPhone" in s:
+        device = "iPhone"
+    elif "iPad" in s:
+        device = "iPad"
+    elif "Android" in s:
+        device = "Android"
+    elif "Windows" in s:
+        device = "Windows"
+    elif "Mac OS X" in s or "Macintosh" in s:
+        device = "Mac"
+    elif "Linux" in s or "X11" in s:
+        device = "Linux"
+    else:
+        device = "未知系统"
+    return f"{browser} · {device}"
+
+
+def describe_ip(ip):
+    """生成 IP 来源描述：内网地址标记为本地/局域网。"""
+    if not ip:
+        return "未知 IP"
+    if ip in ("127.0.0.1", "::1") or ip.startswith("localhost"):
+        return f"本机 ({ip})"
+    if (ip.startswith(("10.", "192.168."))
+            or re.match(r"^172\.(1[6-9]|2\d|3[01])\.", ip)
+            or ip.startswith("fc") or ip.startswith("fd") or ip.startswith("fe80")):
+        return f"局域网 ({ip})"
+    return ip
 
 
 _SAFE_RE = re.compile(r"[^A-Za-z0-9._-]")

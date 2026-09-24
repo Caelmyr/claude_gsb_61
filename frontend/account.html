@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>账号安全 - 在线代码评测与竞赛系统</title>
+  <link rel="stylesheet" href="/assets/app.css">
+  <style>
+    .session-table th, .session-table td { vertical-align: middle; }
+    .current-row td { background: var(--primary-50) !important; }
+    .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
+    .dot.on { background: var(--green); }
+    .dot.off { background: var(--text-muted); }
+    .pw-result { margin-top: 12px; padding: 10px 14px; border-radius: 8px; font-size: 13px; display: none; }
+    .pw-result.ok { display:block; background: var(--green-bg); color: var(--green); }
+    .pw-result.bad { display:block; background: var(--red-bg); color: var(--red); }
+    .strength { font-size: 12px; margin-top: 4px; min-height: 18px; }
+    .strength.bad { color: var(--red); }
+    .strength.good { color: var(--green); }
+    .expired-banner {
+      display:none; background: var(--red-bg); color: var(--red);
+      border:1px solid #f3c0c0; border-radius: 10px; padding: 14px 18px;
+      margin-bottom: 16px; font-weight: 600; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+    }
+  </style>
+</head>
+<body>
+  <div id="nav"></div>
+
+  <div class="container" style="max-width:880px">
+    <div class="page-head">
+      <div>
+        <h1>🔐 账号安全</h1>
+        <div class="sub">修改密码、查看登录记录，并随时下线可疑设备</div>
+      </div>
+    </div>
+
+    <div id="expiredBanner" class="expired-banner">
+      <span>⚠️ 当前登录已失效（可能密码已被修改或被其他设备下线），请重新登录。</span>
+      <button class="btn btn-danger btn-sm" onclick="location.href='/index.html?login=1'">去重新登录</button>
+    </div>
+
+    <div id="content">
+      <!-- 修改密码 -->
+      <div class="card">
+        <div class="card-title">修改密码 <span class="hint">修改后其他设备的登录将立即失效，需重新登录</span></div>
+        <div class="form-group">
+          <label>旧密码</label>
+          <input id="oldPw" type="password" autocomplete="current-password" placeholder="请输入当前密码">
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>新密码</label>
+            <input id="newPw" type="password" autocomplete="new-password" placeholder="至少 8 位，含字母和数字" oninput="checkStrength()">
+            <div id="strengthHint" class="strength"></div>
+          </div>
+          <div class="form-group">
+            <label>确认新密码</label>
+            <input id="newPw2" type="password" autocomplete="new-password" placeholder="再次输入新密码">
+          </div>
+        </div>
+        <button id="changeBtn" class="btn btn-primary" onclick="changePassword()">确认修改</button>
+        <div id="pwResult" class="pw-result"></div>
+      </div>
+
+      <!-- 登录记录 -->
+      <div class="card">
+        <div class="card-title">
+          <span>登录记录与设备管理</span>
+          <span class="hint">
+            <span id="activeSummary"></span>
+            <button class="btn btn-outline btn-sm" onclick="loadSessions(false)">🔄 刷新</button>
+          </span>
+        </div>
+        <div class="toolbar">
+          <button id="kickOthersBtn" class="btn btn-danger" onclick="kickOthers()">一键下线其他设备</button>
+          <span class="hint">当前这台设备不受影响</span>
+        </div>
+        <div class="table-wrap">
+          <table class="session-table">
+            <thead>
+              <tr><th>登录时间</th><th>来源（设备 / IP）</th><th>最近活跃</th><th class="text-center">状态</th><th class="text-right">操作</th></tr>
+            </thead>
+            <tbody id="sessionList">
+              <tr><td colspan="5" class="empty"><span class="spinner"></span> 加载中…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/assets/app.js"></script>
+  <script>
+    OJ.boot("account");
+
+    let pollTimer = null;
+
+    async function init() {
+      if (!OJ.currentUser()) { location.href = "/index.html?login=1"; return; }
+      try { await OJ.requireAuth(); } catch (e) { return; }
+      await loadSessions(false);
+      // 每 15 秒自动刷新：其他设备被下线、当前设备被踢都能尽快反映
+      pollTimer = setInterval(() => { if (!document.hidden) loadSessions(true); }, 15000);
+    }
+
+    // 当前会话失效（被踢 / 密码被别处修改）：页面内提示，不强制跳走
+    window.addEventListener("oj-session-expired", () => {
+      OJ.el("expiredBanner").style.display = "flex";
+      OJ.el("content").style.opacity = ".55";
+      OJ.el("content").style.pointerEvents = "none";
+      if (pollTimer) clearInterval(pollTimer);
+    });
+
+    function checkStrength() {
+      const pw = OJ.el("newPw").value;
+      const hint = OJ.el("strengthHint");
+      if (!pw) { hint.textContent = ""; hint.className = "strength"; return; }
+      const r = OJ.passwordStrength(pw);
+      if (r.ok) { hint.textContent = "✓ 密码强度符合要求"; hint.className = "strength good"; }
+      else { hint.textContent = "✗ " + r.message; hint.className = "strength bad"; }
+    }
+
+    async function changePassword() {
+      const oldPw = OJ.el("oldPw").value;
+      const newPw = OJ.el("newPw").value;
+      const newPw2 = OJ.el("newPw2").value;
+      const result = OJ.el("pwResult");
+      result.className = "pw-result";
+      result.textContent = "";
+
+      if (!oldPw) return showPwResult(false, "请先输入旧密码");
+      const r = OJ.passwordStrength(newPw);
+      if (!r.ok) return showPwResult(false, r.message);
+      if (newPw !== newPw2) return showPwResult(false, "两次输入的新密码不一致");
+      if (newPw === oldPw) return showPwResult(false, "新密码不能与旧密码相同");
+
+      const btn = OJ.el("changeBtn");
+      btn.disabled = true; btn.textContent = "提交中…";
+      try {
+        const res = await OJ.api("/account/change-password", {
+          method: "POST", body: { old_password: oldPw, new_password: newPw },
+        });
+        // 更新当前 token：当前设备保持登录，旧 token 已失效
+        OJ.setSession(res.token, OJ.currentUser());
+        OJ.el("oldPw").value = ""; OJ.el("newPw").value = ""; OJ.el("newPw2").value = "";
+        checkStrength();
+        const n = res.kicked_sessions || 0;
+        showPwResult(true, `密码修改成功${n ? `，已让其他 ${n} 处登录立即失效，需重新登录` : "，当前没有其他在线登录"}`);
+        OJ.toast("密码修改成功", "success");
+        loadSessions(false);
+      } catch (e) {
+        showPwResult(false, e.message);
+      } finally {
+        btn.disabled = false; btn.textContent = "确认修改";
+      }
+    }
+
+    function showPwResult(ok, msg) {
+      const el = OJ.el("pwResult");
+      el.className = "pw-result " + (ok ? "ok" : "bad");
+      el.textContent = (ok ? "✅ " : "⚠️ ") + msg;
+    }
+
+    async function loadSessions(silent) {
+      const tbody = OJ.el("sessionList");
+      try {
+        const data = await OJ.api("/account/sessions");
+        OJ.el("activeSummary").textContent =
+          `在线 ${data.active_count} 处 · 其他设备 ${data.other_active_count} 处　`;
+        OJ.el("kickOthersBtn").disabled = data.other_active_count === 0;
+
+        if (!data.items.length) {
+          tbody.innerHTML = `<tr><td colspan="5" class="empty">暂无登录记录</td></tr>`;
+          return;
+        }
+        tbody.innerHTML = data.items.map(r => {
+          const status = r.current
+            ? `<span class="badge AC"><span class="dot on"></span>本次登录</span>`
+            : r.revoked
+              ? `<span class="badge CE"><span class="dot off"></span>${OJ.esc(r.status_text)}</span>`
+              : `<span class="badge PENDING"><span class="dot on"></span>在线</span>`;
+          const action = r.current
+            ? `<span class="hint">不可下线</span>`
+            : r.revoked
+              ? `<span class="hint">${OJ.fmtTime(r.revoked_at)}</span>`
+              : `<button class="btn btn-danger btn-sm" onclick="kickOne('${OJ.esc(r.id)}')">下线</button>`;
+          return `<tr class="${r.current ? "current-row" : ""}">
+            <td class="mono">${OJ.fmtTime(r.login_at)}</td>
+            <td>${OJ.esc(r.source)}</td>
+            <td class="mono muted">${OJ.fmtTime(r.last_seen)}</td>
+            <td class="text-center">${status}</td>
+            <td class="text-right">${action}</td>
+          </tr>`;
+        }).join("");
+      } catch (e) {
+        if (!silent) tbody.innerHTML = `<tr><td colspan="5" class="empty">${OJ.esc(e.message)}</td></tr>`;
+      }
+    }
+
+    async function kickOne(sid) {
+      if (!await OJ.confirmDialog("确定将这处登录踢下线？对方将立即被要求重新登录。")) return;
+      try {
+        await OJ.api("/account/sessions/" + encodeURIComponent(sid) + "/revoke", { method: "POST" });
+        OJ.toast("已将该登录踢下线", "success");
+        loadSessions(false);
+      } catch (e) { OJ.toast(e.message, "error"); }
+    }
+
+    async function kickOthers() {
+      if (!await OJ.confirmDialog("确定将除当前设备外的所有登录全部踢下线？")) return;
+      const btn = OJ.el("kickOthersBtn");
+      btn.disabled = true; btn.textContent = "处理中…";
+      try {
+        const res = await OJ.api("/account/sessions/revoke-others", { method: "POST" });
+        OJ.toast(res.revoked_count ? `已下线 ${res.revoked_count} 处其他登录` : "没有其他在线设备", "success");
+        loadSessions(false);
+      } catch (e) { OJ.toast(e.message, "error"); }
+      finally { btn.textContent = "一键下线其他设备"; }
+    }
+
+    init();
+  </script>
+</body>
+</html>
